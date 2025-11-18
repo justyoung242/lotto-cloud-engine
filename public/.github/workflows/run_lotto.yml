@@ -28,6 +28,7 @@ jobs:
         run: curl -sL https://firebase.tools | bash
 
       - name: Deploy to Firebase Hosting
+        if: ${{ secrets.FIREBASE_TOKEN != '' }}
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
         run: firebase deploy --only hosting

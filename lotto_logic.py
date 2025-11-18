@@ -1,11 +1,12 @@
-import os, json, requests
+import os, json, requests, time
 from datetime import datetime, timedelta
 from pathlib import Path
 from itertools import combinations
 from bs4 import BeautifulSoup
 
 # ---------------- Config ----------------
-start_year, end_year = 2013, 2025
+start_year = 2013
+end_year = datetime.today().year
 replacement_values = {0: 5, 1: 9, 2: 8, 3: 7, 4: 6, 5: 0, 6: 4, 7: 3, 8: 2, 9: 1}
 
 state_games = {
@@ -17,10 +18,37 @@ BASE_URL = "https://www.lottery.net"
 IL_DATA_FILE = Path("illinois_draws.json")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/123.0.0.0 Safari/537.36"
+    ),
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.google.com/",
 }
+
+
+def safe_get(url: str, max_retries: int = 3, timeout: int = 10):
+    """Make requests.get with retries and basic debug logging.
+    Returns the `requests.Response` on status 200, or None on repeated failure.
+    """
+    last_resp = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=timeout)
+            last_resp = resp
+            if resp.status_code == 200:
+                return resp
+            # non-200: log a short preview and retry if allowed
+            print(f"HTTP {resp.status_code} fetching {url} (attempt {attempt}/{max_retries})")
+            preview = (resp.text or "")[:300]
+            if preview:
+                print("Preview:", preview)
+        except requests.RequestException as e:
+            print(f"Request error fetching {url} (attempt {attempt}/{max_retries}):", e)
+        if attempt < max_retries:
+            time.sleep(3)
+    return last_resp
 
 # ---------------- Alerts ----------------
 alerts = []
@@ -87,27 +115,43 @@ def save_il_data(data: dict):
 # ---------------- Illinois Fetching ----------------
 def fetch_il_draw(date: str, draw_type: str, pick: int):
     url = f"{BASE_URL}/illinois/pick-{pick}-{draw_type}/numbers/{date}"
-    try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        if res.status_code == 404:
-            return None
-        res.raise_for_status()
-
-        soup = BeautifulSoup(res.text, "html.parser")
-        balls = soup.select(f"ul.illinois.results.pick-{pick}-{draw_type} li.ball")
-        numbers = [int(n.text.strip()) for n in balls if n.text.strip().isdigit()]
-
-        if len(numbers) == pick:
-            return numbers
+    res = safe_get(url, max_retries=3, timeout=10)
+    if res is None:
+        return None
+    if res.status_code == 404:
+        return None
+    if res.status_code != 200:
         return None
 
-    except Exception:
-        return None
+    soup = BeautifulSoup(res.text, "html.parser")
+    balls = soup.select(f"ul.illinois.results.pick-{pick}-{draw_type} li.ball")
+    numbers = [int(n.text.strip()) for n in balls if n.text.strip().isdigit()]
+
+    if len(numbers) == pick:
+        return numbers
+    return None
 
 def update_il_data_to_current():
+    """
+    Update Illinois JSON for the recent date range.
+    By default this backfills the last `IL_BACKFILL_DAYS` days (env var, default 30).
+    Set `IL_BACKFILL_DAYS=0` to skip backfill.
+    """
     data = load_il_data()
     today = datetime.today()
-    date = datetime(2022, 10, 9)
+
+    # Number of days to backfill for Illinois date-based pages
+    try:
+        backfill_days = int(os.getenv("IL_BACKFILL_DAYS", "30"))
+    except Exception:
+        backfill_days = 30
+
+    if backfill_days <= 0:
+        # Nothing to backfill; return existing data
+        return data
+
+    start_date = today - timedelta(days=backfill_days)
+    date = start_date
 
     while date <= today:
         date_str = date.strftime("%m-%d-%Y")
@@ -162,8 +206,10 @@ def fetch_draws(state: str, draw_type: str, pick: int = 3) -> list[dict]:
 
     for yr in range(start_year, end_year + 1):
         url = f"{BASE_URL}/{state_url}/pick-{pick}-{draw_type}/numbers/{yr}"
-        resp = requests.get(url, headers=HEADERS)
-        resp.raise_for_status()
+        resp = safe_get(url, max_retries=3, timeout=10)
+        if resp is None or resp.status_code != 200:
+            # skip years we can't fetch (403, timeout, etc.)
+            continue
 
         soup = BeautifulSoup(resp.text, "html.parser")
         rows = soup.find_all("tr")
