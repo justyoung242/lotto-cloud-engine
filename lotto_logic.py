@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 
 # ---------------- Config ----------------
 start_year = 2013
-end_year = datetime.today().year
+zend_year = datetime.today().year
 replacement_values = {0: 5, 1: 9, 2: 8, 3: 7, 4: 6, 5: 0, 6: 4, 7: 3, 8: 2, 9: 1}
 
 state_games = {

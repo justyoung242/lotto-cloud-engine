@@ -1,7 +1,16 @@
-import sys
 
-print(
-    "generate_alerts.py is a shim: alert-generation logic has been moved to the workflow."
-)
-print("Run the GitHub Actions workflow to produce public/alerts.json.")
-sys.exit(0)
+# Entrypoint for GitHub Actions: run lotto analysis and write alerts
+import sys
+import os
+from lotto_logic import run_lotto_analysis
+
+def main():
+    alerts = run_lotto_analysis()
+    os.makedirs("public", exist_ok=True)
+    with open("public/alerts.json", "w") as f:
+        for line in alerts:
+            f.write(line + "\n")
+    print(f"Wrote {len(alerts)} alerts to public/alerts.json")
+
+if __name__ == "__main__":
+    main()
